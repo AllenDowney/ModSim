@@ -89,7 +89,7 @@ def pol2cart(theta, rho, z=None):
 
 from numpy import linspace
 
-def linrange(start, stop, step=1, **options):
+def linrange(start, stop=None, step=1, **options):
     """Make an array of equally spaced values.
 
     start: first value
@@ -98,6 +98,9 @@ def linrange(start, stop, step=1, **options):
 
     returns: NumPy array
     """
+    if stop is None:
+        stop = start
+        start = 0
     n = int(round((stop-start) / step))
     return linspace(start, stop, n+1, **options)
 
@@ -210,7 +213,7 @@ def minimize_scalar(func, *args, **kwargs):
         logger.error(msg)
         raise (e)
 
-    underride(kwargs, tol=1e-4, method='bounded')
+    underride(kwargs, method='bounded')
 
     res = spo.minimize_scalar(func, args=args, **kwargs)
 
@@ -821,6 +824,17 @@ class Params(SettableNamespace):
 def State(**variables):
     """Contains the values of state variables."""
     return pd.Series(variables, name='state')
+
+
+def make_series(x, y, **options):
+    """Make a Pandas Series.
+
+    x: sequence used as the index
+    y: sequence used as the values
+
+    returns: Pandas Series
+    """
+    return pd.Series(y, index=x, **options)
 
 
 def TimeSeries(*args, **kwargs):
