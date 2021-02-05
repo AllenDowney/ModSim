@@ -23,10 +23,11 @@ import numpy as np
 import pandas as pd
 import scipy
 
+import scipy.optimize as spo
+
 from scipy.interpolate import interp1d
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-from scipy.integrate import odeint
 from scipy.integrate import solve_ivp
 
 from types import SimpleNamespace
@@ -88,7 +89,7 @@ def pol2cart(theta, rho, z=None):
 
 from numpy import linspace
 
-def linrange(start, stop, step=1, **options):
+def linrange(start, stop=None, step=1, **options):
     """Make an array of equally spaced values.
 
     start: first value
@@ -97,6 +98,9 @@ def linrange(start, stop, step=1, **options):
 
     returns: NumPy array
     """
+    if stop is None:
+        stop = start
+        start = 0
     n = int(round((stop-start) / step))
     return linspace(start, stop, n+1, **options)
 
@@ -136,58 +140,98 @@ def leastsq(error_func, x0, *args, **options):
     return best_params, details
 
 
-def minimize_scalar(min_func, bounds, *args, **options):
+def root_scalar(func, *args, **kwargs):
     """Finds the input value that minimizes `min_func`.
+
+    Wrapper for
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.root_scalar.html
+
+    func: computes the function to be minimized
+    bracket: sequence of two values, lower and upper bounds of the range to be searched
+    args: any additional positional arguments are passed to func
+    kwargs: any keyword arguments are passed to root_scalar
+
+    returns: RootResults object
+    """
+    bracket = kwargs.get('bracket', None)
+    if bracket is None or len(bracket) != 2:
+        msg = ("To run root_scalar, you have to provide a "
+               "`bracket` keyword argument with a sequence "
+               "of length 2.")
+        raise ValueError(msg)
+
+    try:
+        func(bracket[0], *args)
+    except Exception as e:
+        msg = ("Before running scipy.integrate.root_scalar "
+               "I tried running the function you provided "
+               "with `bracket[0]`, "
+               "and I got the following error:")
+        logger.error(msg)
+        raise (e)
+
+    underride(kwargs, rtol=1e-4)
+
+    res = spo.root_scalar(func, *args, **kwargs)
+
+    if not res.converged:
+        msg = ("scipy.optimize.root_scalar did not converge. "
+               "The message it returned is:\n" + res.flag)
+        raise ValueError(msg)
+
+    return res
+
+
+def minimize_scalar(func, *args, **kwargs):
+    """Finds the input value that minimizes `func`.
 
     Wrapper for
     https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize_scalar.html
 
-    min_func: computes the function to be minimized
-    bounds: sequence of two values, lower and upper bounds of the range to be searched
-    args: any additional positional arguments are passed to min_func
-    options: any keyword arguments are passed as options to minimize_scalar
+    func: computes the function to be minimized
+    args: any additional positional arguments are passed to func
+    kwargs: any keyword arguments are passed to minimize_scalar
 
-    returns: ModSimSeries object
+    returns: OptimizeResult object
     """
+    bounds = kwargs.get('bounds', None)
+
+    if bounds is None or len(bounds) != 2:
+        msg = ("To run maximize_scalar or minimize_scalar, "
+               "you have to provide a `bounds`"
+               "keyword argument with a sequence "
+               "of length 2.")
+        raise ValueError(msg)
+
     try:
-        min_func(bounds[0], *args)
+        func(bounds[0], *args)
     except Exception as e:
-        msg = """Before running scipy.integrate.minimize_scalar, I tried
-                 running the function you provided with the
-                 lower bound, and I got the following error:"""
+        msg = ("Before running scipy.integrate.minimize_scalar, "
+               "I tried running the function you provided "
+               "with the lower bound, "
+               "and I got the following error:")
         logger.error(msg)
         raise (e)
 
-    underride(options, xatol=1e-3)
+    underride(kwargs, method='bounded')
 
-    res = scipy.optimize.minimize_scalar(
-        min_func,
-        bracket=bounds,
-        bounds=bounds,
-        args=args,
-        method="bounded",
-        options=options,
-    )
+    res = spo.minimize_scalar(func, args=args, **kwargs)
 
     if not res.success:
-        msg = (
-            """scipy.optimize.minimize_scalar did not succeed.
-                 The message it returned is %s"""
-            % res.message
-        )
+        msg = ("minimize_scalar did not succeed."
+               "The message it returned is: \n" +
+               res.message)
         raise Exception(msg)
 
     return res
 
 
-def maximize_scalar(max_func, bounds, *args, **options):
+def maximize_scalar(max_func, *args, **kwargs):
     """Finds the input value that maximizes `max_func`.
 
     Wrapper for https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize_scalar.html
 
     min_func: computes the function to be maximized
-    bounds: sequence of two values, lower and upper bounds of the
-            range to be searched
     args: any additional positional arguments are passed to max_func
     options: any keyword arguments are passed as options to minimize_scalar
 
@@ -196,113 +240,11 @@ def maximize_scalar(max_func, bounds, *args, **options):
     def min_func(*args):
         return -max_func(*args)
 
-    res = minimize_scalar(min_func, bounds, *args, **options)
+    res = minimize_scalar(min_func, *args, **kwargs)
 
     # we have to negate the function value before returning res
     res.fun = -res.fun
     return res
-
-
-def minimize_golden(min_func, bracket, *args, **options):
-    """Find the minimum of a function by golden section search.
-
-    Based on
-    https://en.wikipedia.org/wiki/Golden-section_search#Iterative_algorithm
-
-    :param min_func: function to be minimized
-    :param bracket: interval containing a minimum
-    :param args: arguments passes to min_func
-    :param options: rtol and maxiter
-
-    :return: ModSimSeries
-    """
-    maxiter = options.get("maxiter", 100)
-    rtol = options.get("rtol", 1e-3)
-
-    def success(**kwargs):
-        return ModSimSeries(dict(success=True, **kwargs))
-
-    def failure(**kwargs):
-        return ModSimSeries(dict(success=False, **kwargs))
-
-    a, b = bracket
-    ya = min_func(a, *args)
-    yb = min_func(b, *args)
-
-    phi = 2 / (np.sqrt(5) - 1)
-    h = b - a
-    c = b - h / phi
-    yc = min_func(c, *args)
-
-    d = a + h / phi
-    yd = min_func(d, *args)
-
-    if yc > ya or yc > yb:
-        return failure(message="The bracket is not well-formed.")
-
-    for i in range(maxiter):
-
-        # check for convergence
-        if abs(h / c) < rtol:
-            return success(x=c, fun=yc)
-
-        if yc < yd:
-            b, yb = d, yd
-            d, yd = c, yc
-            h = b - a
-            c = b - h / phi
-            yc = min_func(c, *args)
-        else:
-            a, ya = c, yc
-            c, yc = d, yd
-            h = b - a
-            d = a + h / phi
-            yd = min_func(d, *args)
-
-    # if we exited the loop, too many iterations
-    return failure(root=c, message="maximum iterations = %d exceeded" % maxiter)
-
-
-def maximize_golden(max_func, bracket, *args, **options):
-    """Find the maximum of a function by golden section search.
-
-    :param min_func: function to be maximized
-    :param bracket: interval containing a maximum
-    :param args: arguments passes to min_func
-    :param options: rtol and maxiter
-
-    :return: ModSimSeries
-    """
-
-    def min_func(*args):
-        return -max_func(*args)
-
-    res = minimize_golden(min_func, bracket, *args, **options)
-
-    # we have to negate the function value before returning res
-    res.fun = -res.fun
-    return res
-
-
-def minimize_powell(min_func, x0, *args, **options):
-    """Finds the input value that minimizes `min_func`.
-    Wrapper for https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html
-    min_func: computes the function to be minimized
-    x0: initial guess
-    args: any additional positional arguments are passed to min_func
-    options: any keyword arguments are passed as options to minimize_scalar
-    returns: ModSimSeries object
-    """
-    underride(options, tol=1e-3)
-
-    res = scipy.optimize.minimize(min_func, x0, *args, **options)
-
-    return ModSimSeries(res)
-
-
-# make aliases for minimize and maximize
-minimize = minimize_golden
-maximize = maximize_golden
 
 
 def run_solve_ivp(system, slope_func, **options):
@@ -882,6 +824,17 @@ class Params(SettableNamespace):
 def State(**variables):
     """Contains the values of state variables."""
     return pd.Series(variables, name='state')
+
+
+def make_series(x, y, **options):
+    """Make a Pandas Series.
+
+    x: sequence used as the index
+    y: sequence used as the values
+
+    returns: Pandas Series
+    """
+    return pd.Series(y, index=x, **options)
 
 
 def TimeSeries(*args, **kwargs):
