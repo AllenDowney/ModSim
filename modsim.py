@@ -35,7 +35,7 @@ from copy import copy
 import pint
 
 units = pint.UnitRegistry()
-Quantity = units.Quantity
+#Quantity = units.Quantity
 
 
 def flip(p=0.5):
@@ -881,7 +881,7 @@ class Params(SettableNamespace):
 
 def State(**variables):
     """Contains the values of state variables."""
-    return pd.Series(variables)
+    return pd.Series(variables, name='state')
 
 
 def TimeSeries(*args, **kwargs):
@@ -910,6 +910,17 @@ def SweepSeries(*args, **kwargs):
     if 'name' not in kwargs:
         series.name = 'Metric'
     return series
+
+
+def show(obj):
+    """Display a Series or Namespace as a DataFrame."""
+    if isinstance(obj, pd.Series):
+        return pd.DataFrame(obj)
+    elif isinstance(obj, SimpleNamespace):
+        df = pd.DataFrame(obj.__dict__, columns=['value'])
+        return df
+    else:
+        return obj
 
 
 def TimeFrame(*args, **kwargs):
