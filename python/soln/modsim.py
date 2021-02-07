@@ -105,41 +105,6 @@ def linrange(start, stop=None, step=1, **options):
     return linspace(start, stop, n+1, **options)
 
 
-def leastsq(error_func, x0, *args, **options):
-    """Find the parameters that yield the best fit for the data.
-
-    `x0` can be a sequence, array, Series, or Params
-
-    Positional arguments are passed along to `error_func`.
-
-    Keyword arguments are passed to `scipy.optimize.leastsq`
-
-    error_func: function that computes a sequence of errors
-    x0: initial guess for the best parameters
-    args: passed to error_func
-    options: passed to leastsq
-
-    :returns: Params object with best_params and ModSimSeries with details
-    """
-    # override `full_output` so we get a message if something goes wrong
-    options["full_output"] = True
-
-    # run leastsq
-    t = scipy.optimize.leastsq(error_func, x0=x0, args=args, **options)
-    best_params, cov_x, infodict, mesg, ier = t
-
-    # pack the results into a ModSimSeries object
-    details = ModSimSeries(infodict)
-    details.set(cov_x=cov_x, mesg=mesg, ier=ier)
-
-    # if we got a Params object, we should return a Params object
-    if isinstance(x0, Params):
-        best_params = Params(Series(best_params, x0.index))
-
-    # return the best parameters and details
-    return best_params, details
-
-
 def root_scalar(func, *args, **kwargs):
     """Finds the input value that minimizes `min_func`.
 
@@ -318,7 +283,8 @@ def run_solve_ivp(system, slope_func, **options):
             raise (e)
 
     # get dense output unless otherwise specified
-    underride(options, dense_output=True)
+    if not 't_eval' in options:
+        underride(options, dense_output=True)
 
     # run the solver
     bunch = solve_ivp(slope_func, [t_0, system.t_end], system.init,
@@ -354,192 +320,42 @@ def run_solve_ivp(system, slope_func, **options):
     return results, bunch
 
 
-def check_system(system, slope_func):
-    """Make sure the system object has the fields we need for run_ode_solver.
+def leastsq(error_func, x0, *args, **options):
+    """Find the parameters that yield the best fit for the data.
 
-    :param system:
-    :param slope_func:
-    :return:
+    `x0` can be a sequence, array, Series, or Params
+
+    Positional arguments are passed along to `error_func`.
+
+    Keyword arguments are passed to `scipy.optimize.leastsq`
+
+    error_func: function that computes a sequence of errors
+    x0: initial guess for the best parameters
+    args: passed to error_func
+    options: passed to leastsq
+
+    :returns: Params object with best_params and ModSimSeries with details
     """
-    # make sure `system` contains `init`
-    if not hasattr(system, "init"):
-        msg = """It looks like `system` does not contain `init`
-                 as a system variable.  `init` should be a State
-                 object that specifies the initial condition:"""
-        raise ValueError(msg)
+    # override `full_output` so we get a message if something goes wrong
+    options["full_output"] = True
 
-    # make sure `system` contains `t_end`
-    if not hasattr(system, "t_end"):
-        msg = """It looks like `system` does not contain `t_end`
-                 as a system variable.  `t_end` should be the
-                 final time:"""
-        raise ValueError(msg)
+    # run leastsq
+    t = scipy.optimize.leastsq(error_func, x0=x0, args=args, **options)
+    best_params, cov_x, infodict, mesg, ier = t
 
-    # the default value for t_0 is 0
-    t_0 = getattr(system, "t_0", 0)
+    # pack the results into a ModSimSeries object
+    details = SimpleNamespace(cov_x=cov_x,
+                              mesg=mesg,
+                              ier=ier,
+                              **infodict)
+    details.success = details.ier in [1,2,3,4]
 
-    # get the initial conditions
-    init = system.init
+    # if we got a Params object, we should return a Params object
+    if isinstance(x0, Params):
+        best_params = Params(pd.Series(best_params, x0.index))
 
-    # get t_end
-    t_end = system.t_end
-
-    # if dt is not specified, take 100 steps
-    try:
-        dt = system.dt
-    except AttributeError:
-        dt = t_end / 100
-
-    return init, t_0, t_end, dt
-
-
-def run_euler(system, slope_func, **options):
-    """Computes a numerical solution to a differential equation.
-
-    `system` must contain `init` with initial conditions,
-    `t_end` with the end time, and `dt` with the time step.
-
-    `system` may contain `t_0` to override the default, 0
-
-    It can contain any other parameters required by the slope function.
-
-    `options` can be ...
-
-    system: System object
-    slope_func: function that computes slopes
-
-    returns: TimeFrame
-    """
-    # the default message if nothing changes
-    msg = "The solver successfully reached the end of the integration interval."
-
-    # get parameters from system
-    init, t_0, t_end, dt = check_system(system, slope_func)
-
-    # make the TimeFrame
-    frame = TimeFrame(columns=init.index)
-    frame.row[t_0] = init
-    ts = linrange(t_0, t_end, dt) * get_units(t_end)
-
-    # run the solver
-    for t1 in ts:
-        y1 = frame.row[t1]
-        slopes = slope_func(y1, t1, system)
-        y2 = [y + slope * dt for y, slope in zip(y1, slopes)]
-        t2 = t1 + dt
-        frame.row[t2] = y2
-
-    details = ModSimSeries(dict(message="Success"))
-    return frame, details
-
-
-def run_ralston(system, slope_func, **options):
-    """Computes a numerical solution to a differential equation.
-
-    `system` must contain `init` with initial conditions,
-     and `t_end` with the end time.
-
-     `system` may contain `t_0` to override the default, 0
-
-    It can contain any other parameters required by the slope function.
-
-    `options` can be ...
-
-    system: System object
-    slope_func: function that computes slopes
-
-    returns: TimeFrame
-    """
-    # the default message if nothing changes
-    msg = "The solver successfully reached the end of the integration interval."
-
-    # get parameters from system
-    init, t_0, t_end, dt = check_system(system, slope_func)
-
-    # make the TimeFrame
-    frame = TimeFrame(columns=init.index)
-    frame.row[t_0] = init
-    ts = linrange(t_0, t_end, dt) * get_units(t_end)
-
-    event_func = options.get("events", None)
-    z1 = np.nan
-
-    def project(y1, t1, slopes, dt):
-        t2 = t1 + dt
-        y2 = [y + slope * dt for y, slope in zip(y1, slopes)]
-        return y2, t2
-
-    # run the solver
-    for t1 in ts:
-        y1 = frame.row[t1]
-
-        # evaluate the slopes at the start of the time step
-        slopes1 = slope_func(y1, t1, system)
-
-        # evaluate the slopes at the two-thirds point
-        y_mid, t_mid = project(y1, t1, slopes1, 2 * dt / 3)
-        slopes2 = slope_func(y_mid, t_mid, system)
-
-        # compute the weighted sum of the slopes
-        slopes = [(k1 + 3 * k2) / 4 for k1, k2 in zip(slopes1, slopes2)]
-
-        # compute the next time stamp
-        y2, t2 = project(y1, t1, slopes, dt)
-
-        # check for a terminating event
-        if event_func:
-            z2 = event_func(y2, t2, system)
-            if z1 * z2 < 0:
-                scale = magnitude(z1 / (z1 - z2))
-                y2, t2 = project(y1, t1, slopes, scale * dt)
-                frame.row[t2] = y2
-                msg = "A termination event occurred."
-                break
-            else:
-                z1 = z2
-
-        # store the results
-        frame.row[t2] = y2
-
-    details = ModSimSeries(dict(success=True, message=msg))
-    return frame, details
-
-
-run_ode_solver = run_ralston
-
-# TODO: Implement leapfrog
-
-
-def fsolve(func, x0, *args, **options):
-    """Return the roots of the (non-linear) equations
-    defined by func(x) = 0 given a starting estimate.
-
-    Uses scipy.optimize.fsolve, with extra error-checking.
-
-    func: function to find the roots of
-    x0: scalar or array, initial guess
-    args: additional positional arguments are passed along to fsolve,
-          which passes them along to func
-
-    returns: solution as an array
-    """
-    # make sure we can run the given function with x0
-    try:
-        func(x0, *args)
-    except Exception as e:
-        msg = """Before running scipy.optimize.fsolve, I tried
-                 running the error function you provided with the x0
-                 you provided, and I got the following error:"""
-        logger.error(msg)
-        raise (e)
-
-    # make the tolerance more forgiving than the default
-    underride(options, xtol=1e-6)
-
-    # run fsolve
-    result = scipy.optimize.fsolve(func, x0, args=args, **options)
-
-    return result
+    # return the best parameters and details
+    return best_params, details
 
 
 def crossings(series, value):
@@ -615,7 +431,7 @@ def interpolate_inverse(series, **options):
     returns: interpolation object, can be used as a function
              from `b` to `a`
     """
-    inverse = Series(series.index, index=series.values)
+    inverse = pd.Series(series.index, index=series.values)
     interp_func = interpolate(inverse, **options)
     return interp_func
 
@@ -870,8 +686,8 @@ def show(obj):
     if isinstance(obj, pd.Series):
         return pd.DataFrame(obj)
     elif isinstance(obj, SimpleNamespace):
-        df = pd.DataFrame(obj.__dict__, columns=['value'])
-        return df
+        return pd.DataFrame(pd.Series(obj.__dict__),
+                            columns=['value'])
     else:
         return obj
 
@@ -879,12 +695,14 @@ def show(obj):
 def TimeFrame(*args, **kwargs):
     """DataFrame that maps from time to State.
     """
+    underride(kwargs, dtype=float)
     return pd.DataFrame(*args, **kwargs)
 
 
 def SweepFrame(*args, **kwargs):
     """DataFrame that maps from parameter value to SweepSeries.
     """
+    underride(kwargs, dtype=float)
     return pd.DataFrame(*args, **kwargs)
 
 

@@ -283,7 +283,8 @@ def run_solve_ivp(system, slope_func, **options):
             raise (e)
 
     # get dense output unless otherwise specified
-    underride(options, dense_output=True)
+    if not 't_eval' in options:
+        underride(options, dense_output=True)
 
     # run the solver
     bunch = solve_ivp(slope_func, [t_0, system.t_end], system.init,
@@ -343,11 +344,15 @@ def leastsq(error_func, x0, *args, **options):
     best_params, cov_x, infodict, mesg, ier = t
 
     # pack the results into a ModSimSeries object
-    details.update(dict(cov_x=cov_x, mesg=mesg, ier=ier))
+    details = SimpleNamespace(cov_x=cov_x,
+                              mesg=mesg,
+                              ier=ier,
+                              **infodict)
+    details.success = details.ier in [1,2,3,4]
 
     # if we got a Params object, we should return a Params object
     if isinstance(x0, Params):
-        best_params = Params(Series(best_params, x0.index))
+        best_params = Params(pd.Series(best_params, x0.index))
 
     # return the best parameters and details
     return best_params, details
@@ -426,7 +431,7 @@ def interpolate_inverse(series, **options):
     returns: interpolation object, can be used as a function
              from `b` to `a`
     """
-    inverse = Series(series.index, index=series.values)
+    inverse = pd.Series(series.index, index=series.values)
     interp_func = interpolate(inverse, **options)
     return interp_func
 
@@ -681,8 +686,8 @@ def show(obj):
     if isinstance(obj, pd.Series):
         return pd.DataFrame(obj)
     elif isinstance(obj, SimpleNamespace):
-        df = pd.DataFrame(obj.__dict__, columns=['value'])
-        return df
+        return pd.DataFrame(pd.Series(obj.__dict__),
+                            columns=['value'])
     else:
         return obj
 
@@ -690,12 +695,14 @@ def show(obj):
 def TimeFrame(*args, **kwargs):
     """DataFrame that maps from time to State.
     """
+    underride(kwargs, dtype=float)
     return pd.DataFrame(*args, **kwargs)
 
 
 def SweepFrame(*args, **kwargs):
     """DataFrame that maps from parameter value to SweepSeries.
     """
+    underride(kwargs, dtype=float)
     return pd.DataFrame(*args, **kwargs)
 
 
