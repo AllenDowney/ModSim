@@ -163,7 +163,7 @@ def minimize_scalar(func, *args, **kwargs):
 
     if bounds is None or len(bounds) != 2:
         msg = ("To run maximize_scalar or minimize_scalar, "
-               "you have to provide a `bounds`"
+               "you have to provide a `bounds` "
                "keyword argument with a sequence "
                "of length 2.")
         raise ValueError(msg)
@@ -216,9 +216,11 @@ def run_solve_ivp(system, slope_func, **options):
     """Computes a numerical solution to a differential equation.
 
     `system` must contain `init` with initial conditions,
-    `t_0` with the start time, and `t_end` with the end time.
+    `t_end` with the end time.  Optionally, it can contain
+    `t_0` with the start time.
 
-    It can contain any other parameters required by the slope function.
+    It should contain any other parameters required by the
+    slope function.
 
     `options` can be any legal options of `scipy.integrate.solve_ivp`
 
@@ -305,7 +307,7 @@ def run_solve_ivp(system, slope_func, **options):
         try:
             num = system.num
         except AttributeError:
-            num = 51
+            num = 101
         t_final = t[-1]
         t_array = linspace(t_0, t_final, num)
         y_array = bunch.sol(t_array)
@@ -650,6 +652,8 @@ def make_series(x, y, **options):
 
     returns: Pandas Series
     """
+    if isinstance(y, pd.Series):
+        y = y.values
     return pd.Series(y, index=x, **options)
 
 
