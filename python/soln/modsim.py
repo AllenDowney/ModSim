@@ -846,7 +846,7 @@ def plot_segment(A, B, **options):
     """
     xs = A.x, B.x
     ys = A.y, B.y
-    plot(xs, ys, **options)
+    plt.plot(xs, ys, **options)
 
 
 from time import sleep
